@@ -1,8 +1,8 @@
-package com.example
+package com.example.cache
 
 import zio._
 
-class LRUCache[K, V] private (
+final class LRUCache[K, V] private (
   private val capacity: Int,
   private val itemsRef: Ref[Map[K, CacheItem[K, V]]],
   private val startRef: Ref[Option[K]],

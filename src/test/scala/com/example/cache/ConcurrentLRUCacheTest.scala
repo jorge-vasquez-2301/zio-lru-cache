@@ -1,10 +1,10 @@
-package com.example
+package com.example.cache
 
 import zio.ZIO
 import zio.console._
 import zio.test.Assertion._
-import zio.test.environment._
 import zio.test._
+import zio.test.environment.TestConsole
 
 object ConcurrentLRUCacheTest extends DefaultRunnableSpec {
   def spec = suite("ConcurrentLRUCache")(

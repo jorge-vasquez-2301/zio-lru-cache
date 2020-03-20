@@ -3,61 +3,64 @@ package com.example
 import zio._
 import zio.console._
 import zio.random._
+import cache._
 
 object UseLRUCacheWithOneFiber extends App {
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
     (for {
-      lruCache <- LRUCache.make[Int, Int](2)
-      _        <- put(lruCache, 1, 1)
-      _        <- put(lruCache, 2, 2)
-      _        <- get(lruCache, 1)
-      _        <- put(lruCache, 3, 3)
-      _        <- get(lruCache, 2)
-      _        <- put(lruCache, 4, 4)
-      _        <- get(lruCache, 1)
-      _        <- get(lruCache, 3)
-      _        <- get(lruCache, 4)
-    } yield 0).catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
+      _ <- put(1, 1)
+      _ <- put(2, 2)
+      _ <- get(1)
+      _ <- put(3, 3)
+      _ <- get(2)
+      _ <- put(4, 4)
+      _ <- get(1)
+      _ <- get(3)
+      _ <- get(4)
+    } yield 0)
+      .provideCustomLayer(ZLayer.succeed(2) >>> IntLRUCacheEnv.Service.zioRefImpl)
+      .catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
 
-  private def get[K, V](lruCache: LRUCache[K, V], key: K): ZIO[Console, Nothing, Unit] =
+  private def get(key: Int): URIO[Console with IntLRUCacheEnv, Unit] =
     (for {
       _ <- putStrLn(s"Getting key: $key")
-      v <- lruCache.get(key)
+      v <- getInt(key)
       _ <- putStrLn(s"Obtained value: $v")
     } yield ()).catchAll(ex => putStrLn(ex.getMessage))
 
-  private def put[K, V](lruCache: LRUCache[K, V], key: K, value: V): ZIO[Console, Nothing, Unit] =
-    putStrLn(s"Putting ($key, $value)") *> lruCache.put(key, value)
+  private def put(key: Int, value: Int): URIO[Console with IntLRUCacheEnv, Unit] =
+    putStrLn(s"Putting ($key, $value)") *> putInt(key, value)
 }
 
 object UseLRUCacheWithMultipleFibers extends App {
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
     (for {
-      lruCache       <- LRUCache.make[Int, Int](3)
-      fiberReporter  <- reporter(lruCache).forever.fork
-      fiberProducers <- ZIO.forkAll(ZIO.replicate(100)(producer(lruCache).forever))
-      fiberConsumers <- ZIO.forkAll(ZIO.replicate(100)(consumer(lruCache).forever))
+      fiberReporter  <- reporter.forever.fork
+      fiberProducers <- ZIO.forkAll(ZIO.replicate(100)(producer.forever))
+      fiberConsumers <- ZIO.forkAll(ZIO.replicate(100)(consumer.forever))
       _              <- getStrLn.orDie *> (fiberReporter <*> fiberProducers <*> fiberConsumers).interrupt
-    } yield 0).catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
+    } yield 0)
+      .provideCustomLayer(ZLayer.succeed(3) >>> IntLRUCacheEnv.Service.zioRefImpl)
+      .catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
 
-  def producer(lruCache: LRUCache[Int, Int]): URIO[Console with Random, Unit] =
+  val producer: URIO[Console with Random with IntLRUCacheEnv, Unit] =
     for {
       number <- nextInt(100)
       _      <- putStrLn(s"Producing ($number, $number)")
-      _      <- lruCache.put(number, number)
+      _      <- putInt(number, number)
     } yield ()
 
-  def consumer(lruCache: LRUCache[Int, Int]): URIO[Console with Random, Unit] =
+  val consumer: URIO[Console with Random with IntLRUCacheEnv, Unit] =
     (for {
       key   <- nextInt(100)
       _     <- putStrLn(s"Consuming key: $key")
-      value <- lruCache.get(key)
+      value <- getInt(key)
       _     <- putStrLn(s"Consumed value: $value")
     } yield ()).catchAll(ex => putStrLn(ex.getMessage))
 
-  def reporter(lruCache: LRUCache[Int, Int]): ZIO[Console, NoSuchElementException, Unit] =
+  val reporter: ZIO[Console with IntLRUCacheEnv, NoSuchElementException, Unit] =
     for {
-      (items, optionStart, optionEnd) <- lruCache.getStatus
+      (items, optionStart, optionEnd) <- getCacheStatus
       _                               <- putStrLn(s"Items: $items, Start: $optionStart, End: $optionEnd")
     } yield ()
 }
@@ -65,31 +68,32 @@ object UseLRUCacheWithMultipleFibers extends App {
 object UseConcurrentLRUCacheWithMultipleFibers extends App {
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
     (for {
-      concurrentLruCache <- ConcurrentLRUCache.make[Int, Int](3)
-      fiberReporter      <- reporter(concurrentLruCache).forever.fork
-      fiberProducers     <- ZIO.forkAll(ZIO.replicate(100)(producer(concurrentLruCache).forever))
-      fiberConsumers     <- ZIO.forkAll(ZIO.replicate(100)(consumer(concurrentLruCache).forever))
-      _                  <- getStrLn.orDie *> (fiberReporter <*> fiberProducers <*> fiberConsumers).interrupt
-    } yield 0).catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
+      fiberReporter  <- reporter.forever.fork
+      fiberProducers <- ZIO.forkAll(ZIO.replicate(100)(producer.forever))
+      fiberConsumers <- ZIO.forkAll(ZIO.replicate(100)(consumer.forever))
+      _              <- getStrLn.orDie *> (fiberReporter <*> fiberProducers <*> fiberConsumers).interrupt
+    } yield 0)
+      .provideCustomLayer(ZLayer.succeed(3) >>> IntLRUCacheEnv.Service.zioStmImpl)
+      .catchAll(ex => putStrLn(ex.getMessage) *> ZIO.succeed(1))
 
-  def producer(concurrentLruCache: ConcurrentLRUCache[Int, Int]): URIO[Console with Random, Unit] =
+  val producer: URIO[Console with Random with IntLRUCacheEnv, Unit] =
     for {
       number <- nextInt(100)
       _      <- putStrLn(s"Producing ($number, $number)")
-      _      <- concurrentLruCache.put(number, number)
+      _      <- putInt(number, number)
     } yield ()
 
-  def consumer(concurrentLruCache: ConcurrentLRUCache[Int, Int]): URIO[Console with Random, Unit] =
+  val consumer: URIO[Console with Random with IntLRUCacheEnv, Unit] =
     (for {
       key   <- nextInt(100)
       _     <- putStrLn(s"Consuming key: $key")
-      value <- concurrentLruCache.get(key)
+      value <- getInt(key)
       _     <- putStrLn(s"Consumed value: $value")
     } yield ()).catchAll(ex => putStrLn(ex.getMessage))
 
-  def reporter(concurrentLruCache: ConcurrentLRUCache[Int, Int]): ZIO[Console, NoSuchElementException, Unit] =
+  val reporter: ZIO[Console with IntLRUCacheEnv, NoSuchElementException, Unit] =
     for {
-      (items, optionStart, optionEnd) <- concurrentLruCache.getStatus
+      (items, optionStart, optionEnd) <- getCacheStatus
       _                               <- putStrLn(s"Items: $items, Start: $optionStart, End: $optionEnd")
     } yield ()
 }

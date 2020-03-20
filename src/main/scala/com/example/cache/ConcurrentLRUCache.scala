@@ -1,9 +1,9 @@
-package com.example
+package com.example.cache
 
 import zio._
 import zio.stm._
 
-class ConcurrentLRUCache[K, V] private (
+final class ConcurrentLRUCache[K, V] private (
   private val capacity: Int,
   private val items: TMap[K, CacheItem[K, V]],
   private val startRef: TRef[Option[K]],
