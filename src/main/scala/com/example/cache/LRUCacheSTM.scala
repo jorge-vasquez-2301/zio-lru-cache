@@ -3,13 +3,12 @@ package com.example.cache
 import zio._
 import zio.stm._
 
-final class ConcurrentLRUCache[K, V] private (
+final case class LRUCacheSTM[K, V](
   private val capacity: Int,
   private val items: TMap[K, CacheItem[K, V]],
   private val startRef: TRef[Option[K]],
   private val endRef: TRef[Option[K]]
-) { self =>
-
+) extends LRUCache[K, V] { self =>
   def get(key: K): IO[NoSuchElementException, V] =
     (for {
       optionItem <- self.items.get(key)
@@ -18,11 +17,7 @@ final class ConcurrentLRUCache[K, V] private (
     } yield item.value).commitEither.refineToOrDie[NoSuchElementException]
 
   def put(key: K, value: V): UIO[Unit] =
-    (for {
-      optionStart <- self.startRef.get
-      optionEnd   <- self.endRef.get
-      _           <- STM.ifM(self.items.contains(key))(updateItem(key, value), addNewItem(key, value, optionStart, optionEnd))
-    } yield ()).commitEither.orDie
+    STM.ifSTM(self.items.contains(key))(updateItem(key, value), addNewItem(key, value)).commitEither.orDie
 
   val getStatus: UIO[(Map[K, CacheItem[K, V]], Option[K], Option[K])] =
     (for {
@@ -36,21 +31,17 @@ final class ConcurrentLRUCache[K, V] private (
       self.items.put(key, CacheItem(value, None, None)) *>
       addKeyToStartOfList(key)
 
-  private def addNewItem(key: K, value: V, optionStart: Option[K], optionEnd: Option[K]): STM[Error, Unit] = {
+  private def addNewItem(key: K, value: V): STM[Error, Unit] = {
     val newCacheItem = CacheItem[K, V](value, None, None)
-    STM.ifM(self.items.keys.map(_.length < self.capacity))(
+    STM.ifSTM(self.items.keys.map(_.length < self.capacity))(
       self.items.put(key, newCacheItem) *> addKeyToStartOfList(key),
       replaceEndCacheItem(key, newCacheItem)
     )
   }
 
   private def replaceEndCacheItem(key: K, newCacheItem: CacheItem[K, V]): STM[Error, Unit] =
-    endRef.get.flatMap {
-      case Some(end) =>
-        removeKeyFromList(end) *> self.items.delete(end) *> self.items.put(key, newCacheItem) *> addKeyToStartOfList(
-          key
-        )
-      case None => STM.fail(new Error(s"End is not defined!"))
+    endRef.get.someOrFail(new Error(s"End is not defined!")).flatMap { end =>
+      removeKeyFromList(end) *> self.items.delete(end) *> self.items.put(key, newCacheItem) *> addKeyToStartOfList(key)
     }
 
   private def addKeyToStartOfList(key: K): STM[Error, Unit] =
@@ -107,21 +98,21 @@ final class ConcurrentLRUCache[K, V] private (
       _         <- self.items.put(newStart, cacheItem.copy(left = None)) *> self.startRef.set(Some(newStart))
     } yield ()
 
-  private val clearStartAndEnd: STM[Nothing, Unit] = (self.startRef.set(None) *> self.endRef.set(None))
+  private val clearStartAndEnd: STM[Nothing, Unit] = self.startRef.set(None) *> self.endRef.set(None)
 
   private def getExistingCacheItem(key: K): STM[Error, CacheItem[K, V]] =
-    STM.require(new Error(s"Key does not exist: $key"))(self.items.get(key))
+    self.items.get(key).someOrFail(new Error(s"Key does not exist: $key"))
 }
 
-object ConcurrentLRUCache {
-  def make[K, V](capacity: Int): IO[IllegalArgumentException, ConcurrentLRUCache[K, V]] =
-    if (capacity > 0) {
-      (for {
-        itemsRef <- TMap.empty[K, CacheItem[K, V]]
-        startRef <- TRef.make(Option.empty[K])
-        endRef   <- TRef.make(Option.empty[K])
-      } yield new ConcurrentLRUCache[K, V](capacity, itemsRef, startRef, endRef)).commit
-    } else {
-      ZIO.fail(new IllegalArgumentException("Capacity must be a positive number!"))
+object LRUCacheSTM {
+  def layer[K: Tag, V: Tag](capacity: Int): ULayer[LRUCache[K, V]] =
+    ZLayer {
+      if (capacity > 0) {
+        (for {
+          itemsRef <- TMap.empty[K, CacheItem[K, V]]
+          startRef <- TRef.make(Option.empty[K])
+          endRef   <- TRef.make(Option.empty[K])
+        } yield LRUCacheSTM[K, V](capacity, itemsRef, startRef, endRef)).commit
+      } else ZIO.die(new IllegalArgumentException("Capacity must be a positive number!"))
     }
 }

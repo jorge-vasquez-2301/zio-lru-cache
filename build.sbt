@@ -1,9 +1,10 @@
-val scalaVer = "2.13.1"
+val scalaVer = "2.13.10"
 
-val zioVersion = "1.0.0-RC18-2"
+val zioVersion = "2.0.13"
 
 lazy val compileDependencies = Seq(
-  "dev.zio" %% "zio" % zioVersion
+  "dev.zio" %% "zio"        % zioVersion,
+  "dev.zio" %% "zio-macros" % zioVersion
 ) map (_ % Compile)
 
 lazy val testDependencies = Seq(
@@ -13,8 +14,9 @@ lazy val testDependencies = Seq(
 
 lazy val settings = Seq(
   name := "zio-lru-cache",
-  version := "1.0.0",
+  version := "2.0.0",
   scalaVersion := scalaVer,
+  scalacOptions += "-Ymacro-annotations",
   libraryDependencies ++= compileDependencies ++ testDependencies,
   testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
 )
