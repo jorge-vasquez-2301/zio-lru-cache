@@ -2,18 +2,18 @@ package com.example.cache
 
 import zio._
 
-final case class LRUCacheRef[K, V](
+final case class LRUCacheRef[K, V] private (
   private val capacity: Int,
   private val itemsRef: Ref[Map[K, CacheItem[K, V]]],
   private val startRef: Ref[Option[K]],
   private val endRef: Ref[Option[K]]
 ) extends LRUCache[K, V] { self =>
   def get(key: K): IO[NoSuchElementException, V] =
-    (for {
+    for {
       items <- self.itemsRef.get
       item  <- ZIO.from(items.get(key)).orElseFail(new NoSuchElementException(s"Key does not exist: $key"))
       _     <- removeKeyFromList(key) *> addKeyToStartOfList(key)
-    } yield item.value).refineToOrDie[NoSuchElementException]
+    } yield item.value
 
   def put(key: K, value: V): UIO[Unit] =
     ZIO
@@ -21,7 +21,6 @@ final case class LRUCacheRef[K, V](
         updateItem(key, value),
         addNewItem(key, value)
       )
-      .orDie
 
   val getStatus: UIO[(Map[K, CacheItem[K, V]], Option[K], Option[K])] =
     for {
@@ -30,12 +29,12 @@ final case class LRUCacheRef[K, V](
       optionEnd   <- endRef.get
     } yield (items, optionStart, optionEnd)
 
-  private def updateItem(key: K, value: V): IO[Error, Unit] =
+  private def updateItem(key: K, value: V): UIO[Unit] =
     removeKeyFromList(key) *>
       self.itemsRef.update(_.updated(key, CacheItem(value, None, None))) *>
       addKeyToStartOfList(key)
 
-  private def addNewItem(key: K, value: V): IO[Error, Unit] = {
+  private def addNewItem(key: K, value: V): UIO[Unit] = {
     val newCacheItem = CacheItem[K, V](value, None, None)
     ZIO.ifZIO(self.itemsRef.get.map(_.size < self.capacity))(
       self.itemsRef.update(_ + (key -> newCacheItem)) *> addKeyToStartOfList(key),
@@ -43,12 +42,12 @@ final case class LRUCacheRef[K, V](
     )
   }
 
-  private def replaceEndCacheItem(key: K, newCacheItem: CacheItem[K, V]): IO[Error, Unit] =
-    endRef.get.someOrFail(new Error(s"End is not defined!")).flatMap { end =>
+  private def replaceEndCacheItem(key: K, newCacheItem: CacheItem[K, V]): UIO[Unit] =
+    endRef.get.someOrElseZIO(ZIO.dieMessage(s"End is not defined!")).flatMap { end =>
       removeKeyFromList(end) *> self.itemsRef.update(_ - end + (key -> newCacheItem)) *> addKeyToStartOfList(key)
     }
 
-  private def addKeyToStartOfList(key: K): IO[Error, Unit] =
+  private def addKeyToStartOfList(key: K): UIO[Unit] =
     for {
       oldOptionStart <- self.startRef.get
       _ <- getExistingCacheItem(key).flatMap { cacheItem =>
@@ -65,7 +64,7 @@ final case class LRUCacheRef[K, V](
       _ <- self.endRef.updateSome { case None => Some(key) }
     } yield ()
 
-  private def removeKeyFromList(key: K): IO[Error, Unit] =
+  private def removeKeyFromList(key: K): UIO[Unit] =
     for {
       cacheItem      <- getExistingCacheItem(key)
       optionLeftKey  = cacheItem.left
@@ -82,7 +81,7 @@ final case class LRUCacheRef[K, V](
           }
     } yield ()
 
-  private def updateLeftAndRightCacheItems(l: K, r: K): IO[Error, Unit] =
+  private def updateLeftAndRightCacheItems(l: K, r: K): UIO[Unit] =
     for {
       leftCacheItem  <- getExistingCacheItem(l)
       rightCacheItem <- getExistingCacheItem(r)
@@ -90,13 +89,13 @@ final case class LRUCacheRef[K, V](
       _              <- self.itemsRef.update(_.updated(r, rightCacheItem.copy(left = Some(l))))
     } yield ()
 
-  private def setNewEnd(newEnd: K): IO[Error, Unit] =
+  private def setNewEnd(newEnd: K): UIO[Unit] =
     for {
       cacheItem <- getExistingCacheItem(newEnd)
       _         <- self.itemsRef.update(_.updated(newEnd, cacheItem.copy(right = None))) *> self.endRef.set(Some(newEnd))
     } yield ()
 
-  private def setNewStart(newStart: K): IO[Error, Unit] =
+  private def setNewStart(newStart: K): UIO[Unit] =
     for {
       cacheItem <- getExistingCacheItem(newStart)
       _         <- self.itemsRef.update(_.updated(newStart, cacheItem.copy(left = None))) *> self.startRef.set(Some(newStart))
@@ -104,8 +103,8 @@ final case class LRUCacheRef[K, V](
 
   private val clearStartAndEnd: UIO[Unit] = self.startRef.set(None) *> self.endRef.set(None)
 
-  private def getExistingCacheItem(key: K): IO[Error, CacheItem[K, V]] =
-    self.itemsRef.get.map(_.get(key)).someOrFail(new Error(s"Key does not exist: $key"))
+  private def getExistingCacheItem(key: K): UIO[CacheItem[K, V]] =
+    self.itemsRef.get.map(_.get(key)).someOrElseZIO(ZIO.dieMessage(s"Key does not exist: $key, but it should!"))
 }
 
 object LRUCacheRef {

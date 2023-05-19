@@ -8,8 +8,8 @@ object LRUCacheSTMSpec extends ZIOSpecDefault {
     suite("LRUCacheSTM")(
       test("can't be created with non-positive capacity") {
         for {
-          result <- LRUCache.put(1, 1).provideLayer(LRUCacheSTM.layer(-2)).absorb.either
-        } yield assertTrue(result.left.map(_.getMessage) == Left("Capacity must be a positive number!"))
+          result <- LRUCache.put(1, 1).provideLayer(LRUCacheSTM.layer(-2)).absorb.either.left.map(_.getMessage)
+        } yield assertTrue(result == "Capacity must be a positive number!")
       },
       test("works as expected") {
         val expectedOutput = Vector(
